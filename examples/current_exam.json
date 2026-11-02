@@ -1,0 +1,49 @@
+{
+  "course": "EEE 212",
+  "exam_title": "Midterm Exam",
+  "date": "2026-11-04",
+  "time": "19:30",
+  "filename_prefix": "EEE212",
+  "seed": "EEE212-2026-11-04-v1",
+  "roster_file": "current_roster.csv",
+  "seating_policy": "front_first",
+  "paper_size": "auto",
+  "sort_order": "turkish",
+  "excluded_student_ids": [],
+  "rooms": [
+    {
+      "name": "EE03",
+      "rows": 7,
+      "columns": 6,
+      "aisles_after": [
+        2,
+        4
+      ],
+      "student_count": 27,
+      "blocked_seats": []
+    },
+    {
+      "name": "EE04",
+      "rows": 7,
+      "columns": 6,
+      "aisles_after": [
+        2,
+        4
+      ],
+      "student_count": 27,
+      "blocked_seats": []
+    },
+    {
+      "name": "EE05",
+      "rows": 7,
+      "columns": 6,
+      "aisles_after": [
+        2,
+        4
+      ],
+      "student_count": 27,
+      "blocked_seats": []
+    }
+  ],
+  "reuse_assignments_file": "current_assignments.csv"
+}

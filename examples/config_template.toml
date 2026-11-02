@@ -1,0 +1,25 @@
+# Copy this file for a new exam. File paths are relative to this file.
+course = "EEE 212"
+exam_title = "Midterm Exam"
+date = "2026-11-04"  # Keep dates and times in quotes.
+time = "19:30"
+seed = "EEE212-2026-11-04-v1"  # Change this to make a new allocation.
+roster_file = "current_roster.csv"
+
+# Shared settings; a room can override any of these.
+[room_defaults]
+rows = 7
+columns = 6
+aisles_after = [2, 4]
+student_count = 27
+# seating_policy = "front_first"  # Default; also "spread" or "random".
+# paper_size = "auto"             # Default; also "A4", "A3", or "A2".
+
+[[rooms]]
+name = "EE03"
+
+[[rooms]]
+name = "EE04"
+
+[[rooms]]
+name = "EE05"

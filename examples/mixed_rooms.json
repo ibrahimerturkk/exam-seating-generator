@@ -1,0 +1,13 @@
+{
+  "course": "EEE 212",
+  "exam_title": "Example Exam",
+  "date": "2026-11-04",
+  "time": "19:30",
+  "filename_prefix": "EEE212",
+  "seed": "mixed-room-example",
+  "roster_file": "sample_roster.csv",
+  "rooms": [
+    {"name": "ROOM_A", "rows": 3, "columns": 4, "aisles_after": [2], "student_count": 7, "blocked_seats": ["1A"]},
+    {"name": "ROOM_B", "rows": 4, "columns": 3, "student_count": 5, "seating_policy": "spread"}
+  ]
+}
