@@ -368,22 +368,37 @@ def csv_rows(path: Path) -> tuple[list[str], list[dict[str, str]]]:
 
 
 def parse_csv(content: str, label: str) -> tuple[list[str], list[dict[str, str]]]:
+    # Detect the delimiter from the header, so padding and irregular blank rows
+    # cannot affect detection. Do not strip the actual stream: tabs can delimit
+    # empty fields, and quoted values can contain newlines.
+    first = next((line for line in content.splitlines() if line.strip()), "")
     try:
-        dialect = csv.Sniffer().sniff(content[:8192], delimiters=",;\t")
+        delimiter = csv.Sniffer().sniff(first.rstrip(" \t"), delimiters=",;\t").delimiter
     except csv.Error:
-        dialect = csv.excel
-    reader = csv.DictReader(io.StringIO(content), dialect=dialect)
-    headers = [header_key(h.strip()) for h in (reader.fieldnames or [])]
-    if len(set(headers)) != len(headers):
-        raise ValueError(f"Duplicate column header in {label}.")
+        delimiter = ","
+    # Header-only sniffing cannot infer escaped quotes in later data rows.
+    # Use standard CSV quoting independently of the detected delimiter.
+    reader = csv.reader(io.StringIO(content), delimiter=delimiter, skipinitialspace=True)
+    headers: list[str] | None = None
     records = []
-    for index, row in enumerate(reader, 2):
-        if None in row or any(v is None for v in row.values()):
-            raise ValueError(f"{label}, row {index}: wrong number of columns.")
-        record = {header_key(k.strip()): clean(v) for k, v in row.items()}
-        if any(record.values()):
-            records.append(record)
-    return headers, records
+    for row in reader:
+        if not any(value.strip() for value in row):
+            continue
+        if delimiter == "\t":
+            # Extra trailing tabs are whitespace padding, provided they do not
+            # remove an expected field or discard any nonempty cell.
+            minimum = len(headers) if headers is not None else 0
+            while len(row) > minimum and not row[-1].strip():
+                row.pop()
+        if headers is None:
+            headers = [header_key(value.strip()) for value in row]
+            if len(set(headers)) != len(headers):
+                raise ValueError(f"Duplicate column header in {label}.")
+            continue
+        if len(row) != len(headers):
+            raise ValueError(f"{label}, row {reader.line_num}: wrong number of columns.")
+        records.append({key: clean(value) for key, value in zip(headers, row, strict=True)})
+    return headers or [], records
 
 
 def read_roster(path: Path) -> list[Student]:

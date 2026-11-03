@@ -1,5 +1,7 @@
 """Protect student identity, CSV interoperability, and saved allocation checks."""
 
+import csv
+import io
 from dataclasses import replace
 from pathlib import Path
 
@@ -11,6 +13,7 @@ from seating import (
     Room,
     Student,
     assign,
+    parse_roster,
     read_roster,
     reuse_assignments,
     sort_key,
@@ -30,6 +33,59 @@ def test_alias_headers_delimiters_and_optional_sections(tmp_path: Path, delimite
         encoding="utf-8-sig",
     )
     assert read_roster(path) == [Student("00123", "Çağrı", "Öztürk")]
+
+
+@pytest.mark.parametrize("delimiter", [",", ";", "\t"])
+def test_padded_fields_blank_lines_and_trailing_tabs_are_ignored(delimiter: str) -> None:
+    stream = io.StringIO()
+    writer = csv.writer(stream, delimiter=delimiter, lineterminator="\r\n")
+    writer.writerow([" student_id ", " given_name ", " surname ", " section "])
+    writer.writerow([" 00123 ", " Çağrı İhsan ", " Öztürk, Kaya ", " 1 "])
+    padded = " \t\r\n" + " \t\r\n".join(stream.getvalue().split("\r\n")) + " \t\r\n"
+    assert parse_roster(padded) == [Student("00123", "Çağrı İhsan", "Öztürk, Kaya", "1")]
+
+
+@pytest.mark.parametrize("padding", ["   ", "\t\t", " \t \u00a0 "])
+def test_section_list_trailing_whitespace_preserves_students(padding: str) -> None:
+    rows = [
+        "Section: 1",
+        "1\tÖztürk\tÇağrı İhsan\t00000001",
+        "",
+        "Section: 2",
+        "1\tGül\tİhsan Atalay\t00000002",
+    ]
+    content = "\ufeff" + "\r\n".join(row + padding for row in rows)
+    assert parse_roster(content) == [
+        Student("00000001", "Çağrı İhsan", "Öztürk", "1"),
+        Student("00000002", "İhsan Atalay", "Gül", "2"),
+    ]
+
+
+def test_whitespace_handling_preserves_multiline_quoted_fields_and_empty_section() -> None:
+    content = 'student_id,given_name,surname,section\n00123,"Çağrı\nİhsan",Öztürk, \t\n \t\n'
+    assert parse_roster(content) == [Student("00123", "Çağrı İhsan", "Öztürk")]
+    tsv = "student_id\tgiven_name\tsurname\tsection\t \t\n00123\tÇağrı\tÖztürk\t\t \t\n"
+    assert parse_roster(tsv) == [Student("00123", "Çağrı", "Öztürk")]
+
+
+@pytest.mark.parametrize("delimiter", [",", ";", "\t"])
+def test_padded_csv_preserves_escaped_quotes_and_multiline_names(delimiter: str) -> None:
+    stream = io.StringIO()
+    writer = csv.writer(stream, delimiter=delimiter)
+    writer.writerow(["student_id", "given_name", "surname", "section"])
+    writer.writerow(["00123", ' Çağrı "Example"\nİhsan ', " Öztürk, Kaya ", ""])
+    assert parse_roster(" \t\n" + stream.getvalue() + " \t\n") == [
+        Student("00123", 'Çağrı "Example" İhsan', "Öztürk, Kaya")
+    ]
+
+
+@pytest.mark.parametrize("delimiter", [",", ";", "\t"])
+def test_whitespace_does_not_hide_missing_fields_or_extra_data(delimiter: str) -> None:
+    header = delimiter.join(["student_id", "given_name", "surname", "section"])
+    for values in (["001", "Name"], ["001", "Name", "Surname", "1", "extra"]):
+        content = f"{header}\n \t\n{delimiter.join(values)} \t\n"
+        with pytest.raises(ValueError, match="wrong number of columns"):
+            parse_roster(content)
 
 
 @pytest.mark.parametrize(

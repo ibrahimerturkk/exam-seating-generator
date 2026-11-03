@@ -99,7 +99,10 @@ blocked_seats = ["1A"]
 
 Both the UI and CLI accept the original section-headed `list.csv` format,
 including mixed tabs/spaces, blank lines, UTF-8 BOMs, and Turkish names. They
-also accept ordinary comma-, semicolon-, or tab-separated tables. The UI shows
+also accept ordinary comma-, semicolon-, or tab-separated tables.
+Whitespace around fields and section headings, trailing spaces/tabs, and
+whitespace-only lines are ignored while student IDs retain leading zeros.
+Missing fields and extra nonempty columns still produce errors. The UI shows
 the detected format, student total, and section counts immediately after loading.
 It preserves student IDs, including leading zeros, and rejects duplicate IDs or
 malformed rows. Nearby-file detection looks only for `list.csv` in this project's
