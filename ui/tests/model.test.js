@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { available, blankConfig, columnLabel, duplicateRoom, exportConfig, newRoom, resizeRoom, safePrefix, toggleAisle, toggleSeat } from "../model.js";
+import { available, blankConfig, columnLabel, duplicateRoom, exportConfig, newRoom, resizeRoom, safePrefix, toggleAisle, toggleSeat, mergeRoomLibrary, selectLibraryRooms } from "../model.js";
 
 test("spreadsheet-style column labels include multi-letter columns", () => {
   assert.deepEqual([0, 25, 26, 51].map(columnLabel), ["A", "Z", "AA", "AZ"]);
@@ -58,4 +58,32 @@ test("new drafts are course-neutral and exports preserve explicit settings", () 
   draft.filename_prefix = "Custom";
   assert.equal(exportConfig(draft).rooms[0].section, "1");
   assert.equal(exportConfig(draft).filename_prefix, "Custom");
+});
+
+test("library selection keeps exam adjustments and excludes unused rooms", () => {
+  const existing = { ...newRoom(), name:"Hall A", student_count:17, blocked_seats:["1A"] };
+  const library = [{ ...newRoom(), name:"Hall A" }, { ...newRoom(), name:"Hall B" }, { ...newRoom(), name:"Hall C" }];
+  const selected = selectLibraryRooms([existing], library, ["Hall A","Hall C"]);
+  assert.deepEqual(selected.map(r=>r.name),["Hall A","Hall C"]);
+  assert.equal(selected[0].student_count,17);
+  assert.deepEqual(selected[0].blocked_seats,["1A"]);
+  assert.equal(selected[1].student_count,0);
+  selected[0].blocked_seats.push("1B");
+  assert.deepEqual(existing.blocked_seats,["1A"]);
+});
+
+test("library selection requires at least one existing definition", () => {
+  assert.throws(()=>selectLibraryRooms([],[],[]),/at least one/);
+  assert.throws(()=>selectLibraryRooms([],[],["missing"]),/no longer/);
+});
+
+test("room libraries merge by name without sharing mutable layouts", () => {
+  const old = { ...newRoom(), name:"A" };
+  const updated = { ...newRoom(), name:"A", rows:3 };
+  const merged = mergeRoomLibrary([old],[updated,{...newRoom(),name:"B"}]);
+  assert.deepEqual(merged.map(r=>r.name),["A","B"]);
+  assert.equal(merged[0].rows,3);
+  merged[0].aisles_after.push(5);
+  assert.deepEqual(updated.aisles_after,[2,4]);
+  assert.equal(old.rows,5);
 });

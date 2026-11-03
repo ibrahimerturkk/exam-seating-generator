@@ -193,13 +193,20 @@ def read_config(path: Path) -> tuple[Config, dict[str, Any]]:
 
 def parse_config(content: str, config_format: str) -> tuple[Config, dict[str, Any]]:
     """Read uploaded or on-disk configuration using the same strict validation."""
+    raw = load_settings(content, config_format)
+    return config_from_dict(raw), raw
+
+
+def load_settings(content: str, config_format: str) -> Any:
+    """Decode JSON/TOML for exam configs and reusable room libraries."""
+    content = content.lstrip("\ufeff")
     if config_format.lower().lstrip(".") == "toml":
         raw = tomllib.loads(content)
     elif config_format.lower().lstrip(".") == "json":
         raw = json.loads(content, object_pairs_hook=json_object)
     else:
         raise ValueError("Configuration filename must end in .toml or .json.")
-    return config_from_dict(raw), raw
+    return raw
 
 
 def config_from_dict(raw: Any) -> Config:

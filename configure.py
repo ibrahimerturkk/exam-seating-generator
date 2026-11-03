@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlsplit
 
+import editor_workflow as workflow
 from generate import geometry, register_fonts
 from seating import (
     Config,
@@ -26,7 +27,7 @@ from seating import (
 )
 
 ASSETS = Path(__file__).resolve().parent / "ui"
-MAX_BODY = 2 * 1024 * 1024
+MAX_BODY = 4 * 1024 * 1024
 
 
 def editor_config(config: Config, source: dict[str, Any]) -> dict[str, Any]:
@@ -100,6 +101,8 @@ def toml_text(config: dict[str, Any]) -> str:
 
 
 def api_request(route: str, body: dict[str, Any]) -> dict[str, Any]:
+    if route in ("/api/nearby-roster", "/api/roster", "/api/library/import", "/api/library/save"):
+        return workflow.workflow_action(route, body)
     if route == "/api/import":
         if not isinstance(body.get("content"), str) or not isinstance(body.get("format"), str):
             raise ValueError("Choose a TOML or JSON configuration file.")
@@ -156,14 +159,18 @@ def api_request(route: str, body: dict[str, Any]) -> dict[str, Any]:
 
 
 class EditorHandler(BaseHTTPRequestHandler):
-    """Serve only editor assets; configuration paths never read local files."""
+    """Serve local editor actions and downloads without exposing arbitrary paths."""
 
-    def respond(self, status: int, content: bytes, content_type: str) -> None:
+    def respond(
+        self, status: int, content: bytes, content_type: str, filename: str | None = None
+    ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(content)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        if filename is not None:
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.send_header(
             "Content-Security-Policy",
             "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
@@ -173,6 +180,43 @@ class EditorHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         route = urlsplit(self.path).path
+        if route.startswith(("/api/", "/downloads/")):
+            if not self.local_request():
+                return
+            if route.startswith("/downloads/"):
+                parts = route.split("/")
+                found = (
+                    cast(EditorServer, self.server).downloads.get(parts[2], parts[3])
+                    if len(parts) == 4
+                    else None
+                )
+                if found is None:
+                    self.respond(
+                        404,
+                        b"Download expired or not found. Generate the PDFs again.",
+                        "text/plain; charset=utf-8",
+                    )
+                else:
+                    self.respond(200, found[0], found[1], parts[3])
+                return
+            try:
+                if route == "/api/nearby-roster":
+                    result = workflow.nearby_roster()
+                elif route == "/api/library":
+                    result = workflow.parse_room_library(
+                        workflow.DEFAULT_LIBRARY.read_text(encoding="utf-8"), "toml"
+                    )
+                else:
+                    self.respond(404, b"Not found", "text/plain; charset=utf-8")
+                    return
+                self.respond(
+                    200,
+                    json.dumps(result, ensure_ascii=False).encode(),
+                    "application/json; charset=utf-8",
+                )
+            except (OSError, ValueError) as error:
+                self.respond(400, json.dumps({"error": str(error)}).encode(), "application/json")
+            return
         assets = {
             "/": "index.html",
             "/app.js": "app.js",
@@ -189,7 +233,7 @@ class EditorHandler(BaseHTTPRequestHandler):
             (mimetypes.guess_type(path.name)[0] or "text/plain") + "; charset=utf-8",
         )
 
-    def do_POST(self) -> None:  # noqa: N802
+    def local_request(self) -> bool:
         origin = self.headers.get("Origin")
         host = self.headers.get("Host", "")
         expected = f"127.0.0.1:{cast(ThreadingHTTPServer, self.server).server_port}"
@@ -197,16 +241,25 @@ class EditorHandler(BaseHTTPRequestHandler):
             self.respond(
                 403, b'{"error":"Open the editor using its local URL."}', "application/json"
             )
+            return False
+        return True
+
+    def do_POST(self) -> None:  # noqa: N802
+        if not self.local_request():
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
             if not 0 < length <= MAX_BODY:
-                raise ValueError("Choose a file smaller than 2 MB.")
+                raise ValueError("The combined upload must be smaller than 4 MB.")
             body = json.loads(self.rfile.read(length))
             if not isinstance(body, dict):
                 raise ValueError("Request must be an object.")
-            result = api_request(urlsplit(self.path).path, body)
-        except (ValueError, KeyError) as error:
+            route = urlsplit(self.path).path
+            if route == "/api/generate":
+                result = cast(EditorServer, self.server).downloads.add(workflow.generate_exam(body))
+            else:
+                result = api_request(route, body)
+        except (ValueError, KeyError, OSError) as error:
             self.respond(400, json.dumps({"error": str(error)}).encode(), "application/json")
             return
         self.respond(
@@ -215,6 +268,12 @@ class EditorHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
         pass  # Do not log roster contents or other uploaded data.
+
+
+class EditorServer(ThreadingHTTPServer):
+    def __init__(self, address: tuple[str, int], handler: type[BaseHTTPRequestHandler]) -> None:
+        super().__init__(address, handler)
+        self.downloads = workflow.DownloadStore()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -227,7 +286,7 @@ def main(argv: list[str] | None = None) -> int:
     if not 0 <= args.port <= 65535:
         parser.error("--port must be between 0 and 65535.")
     try:
-        with ThreadingHTTPServer(("127.0.0.1", args.port), EditorHandler) as server:
+        with EditorServer(("127.0.0.1", args.port), EditorHandler) as server:
             url = f"http://127.0.0.1:{server.server_port}"
             print(f"Exam room planner: {url}\nPress Ctrl+C to stop.", flush=True)
             if not args.no_browser:

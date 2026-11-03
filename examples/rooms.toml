@@ -1,0 +1,16 @@
+# Reusable physical rooms, independent of course, roster, and exam counts.
+version = 1
+
+[room_defaults]
+rows = 7
+columns = 6
+aisles_after = [2, 4]
+
+[[rooms]]
+name = "EE03"
+
+[[rooms]]
+name = "EE04"
+
+[[rooms]]
+name = "EE05"

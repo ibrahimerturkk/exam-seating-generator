@@ -1,9 +1,11 @@
 import { available, blankConfig, columnLabel, duplicateRoom, exportConfig, newRoom,
-  resizeRoom, safePrefix, toggleAisle, toggleSeat } from "/model.js";
+  resizeRoom, safePrefix, toggleAisle, toggleSeat, mergeRoomLibrary, selectLibraryRooms } from "/model.js";
 
 const $ = id => document.getElementById(id);
 const storageKey = "exam-room-planner-v1";
 let state = blankConfig(), selected = 0, rosterText = "", revision = 0, busy = false, checked = null;
+let library = [], librarySelection = new Set(), assignmentsText = "", generating = false, generatedRevision = null;
+const libraryKey = "exam-room-library-v1";
 try {
   const draft = JSON.parse(localStorage.getItem(storageKey));
   if (draft?.rooms?.length && draft.rooms.every(room => Number.isInteger(room.rows) && Number.isInteger(room.columns) && Array.isArray(room.blocked_seats) && Array.isArray(room.aisles_after))) state = draft;
@@ -35,6 +37,7 @@ function changed() {
   $("check-results").hidden = true;
   $("review-status").textContent = "Changes need checking before you save.";
   $("message").hidden = true;
+  if (generatedRevision !== null) $("generated-stale").hidden = generatedRevision === revision;
   try { localStorage.setItem(storageKey, JSON.stringify(state)); $("draft-status").textContent = "Draft saved in this browser"; }
   catch { $("draft-status").textContent = "Unsaved local draft"; }
   renderSummary();
@@ -180,10 +183,22 @@ async function api(route, body) {
   return data;
 }
 
+async function apiGet(route) {
+  const response = await fetch(route);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "Could not load the editor data.");
+  return data;
+}
+
 function setBusy(value) {
   busy = value;
-  for (const id of ["check-button", "save-button", "import-button", "fit-button"]) $(id).disabled = value || (id === "fit-button" && !rosterText);
-  for (const id of ["roster-upload", "import-file", "clear-roster"]) $(id).disabled = value;
+  for (const id of ["check-button", "save-button", "import-button", "save-rooms", "nearby-roster", "import-library"]) $(id).disabled = value;
+  for (const id of ["fit-button", "generate-button", "generate-review"]) $(id).disabled = value || !rosterText;
+  for (const id of ["roster-upload", "import-file", "clear-roster", "assignments-upload", "clear-assignments", "fresh-allocation", "library-file"]) $(id).disabled = value;
+  $("library-button").disabled = value || !library.length;
+  $("download-library").disabled = value || !library.length;
+  $("use-library").disabled = value || !librarySelection.size;
+  for (const id of ["generate-button", "generate-review"]) $(id).textContent = generating ? "Generating…" : "Generate PDFs";
   $("check-button").textContent = value ? "Checking…" : "Check configuration";
 }
 
@@ -199,6 +214,12 @@ function showResults(result) {
   $("section-choices").replaceChildren(...Object.keys(result.sections).map(section => { const option = node("option"); option.value = section; return option; }));
 }
 
+function currentConfig() {
+  const config = exportConfig(state);
+  if ($("fresh-allocation").checked) delete config.reuse_assignments_file;
+  return config;
+}
+
 async function check(fit = false, save = false) {
   if (busy) return;
   for (const input of document.querySelectorAll("input[required], input[type=number]")) if (!input.reportValidity()) return;
@@ -206,7 +227,7 @@ async function check(fit = false, save = false) {
   const stamp = revision;
   setBusy(true);
   try {
-    const result = await api(fit ? "/api/fit" : "/api/check", { config: exportConfig(state), roster: rosterText });
+    const result = await api(fit ? "/api/fit" : "/api/check", { config: currentConfig(), roster: rosterText });
     if (stamp !== revision) { message("The configuration changed while checking. Please check it again."); return; }
     if (fit) { const autoPrefix = !state.filename_prefix; state = result.config; if (autoPrefix) state.filename_prefix = ""; changed(); renderAll(); }
     checked = result;
@@ -223,12 +244,15 @@ $("save-button").addEventListener("click", () => check(false, true));
 $("roster-upload").addEventListener("change", async event => {
   const file = event.target.files[0]; if (!file) return;
   if (file.size > 1024 * 1024) { message("Choose a roster smaller than 1 MB.", "error"); event.target.value = ""; return; }
-  rosterText = await file.text();
-  state.roster_file = file.name; $("roster_file").value = file.name;
-  $("roster-status").textContent = `${file.name} loaded. Auto-fit or check to verify it.`;
-  $("clear-roster").hidden = false; changed(); setBusy(false);
+  setBusy(true);
+  try {
+    const content = await file.text();
+    const summary = await api("/api/roster", { content, filename: file.name });
+    useRoster(content, summary);
+  } catch (error) { message(error.message, "error"); event.target.value = ""; }
+  finally { setBusy(false); }
 });
-$("clear-roster").addEventListener("click", () => { rosterText = ""; $("roster-upload").value = ""; $("clear-roster").hidden = true; $("roster-status").textContent = "Student data stays in this local session."; changed(); setBusy(false); });
+$("clear-roster").addEventListener("click", () => { clearRoster(); changed(); setBusy(false); });
 $("import-button").addEventListener("click", () => $("import-file").click());
 $("import-file").addEventListener("change", async event => {
   const file = event.target.files[0]; if (!file) return;
@@ -238,8 +262,7 @@ $("import-file").addEventListener("change", async event => {
     const stamp = revision;
     const result = await api("/api/import", { content: await file.text(), format: file.name.split(".").pop() });
     if (stamp !== revision) throw new Error("The draft changed while importing. Please import again.");
-    state = result.config; selected = 0; rosterText = "";
-    $("roster-upload").value = ""; $("clear-roster").hidden = true; $("roster-status").textContent = "Student data stays in this local session.";
+    state = result.config; selected = 0; clearRoster(); clearAssignments();
     changed(); renderAll(); message(`Imported ${file.name}. You can now edit its rooms.`);
   } catch (error) { message(error.message, "error"); }
   finally { event.target.value = ""; setBusy(false); }
@@ -255,4 +278,138 @@ $("download-button").addEventListener("click", () => {
   const url = URL.createObjectURL(new Blob([checked[format]], { type: format === "json" ? "application/json" : "application/toml" }));
   const link = node("a"); link.href = url; link.download = exportName(); document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
+
+function clearRoster() {
+  rosterText = ""; $("roster-upload").value = ""; $("clear-roster").hidden = true;
+  $("roster-status").textContent = "Load a roster to generate PDFs. Student data stays in this local session.";
+}
+
+function useRoster(content, summary) {
+  rosterText = content;
+  state.roster_file = summary.filename; $("roster_file").value = summary.filename;
+  const sections = Object.entries(summary.sections).map(([name, count]) => `${name === "No section" ? name : `Section ${name}`}: ${count}`).join(" · ");
+  $("roster-status").textContent = `${summary.filename} · ${summary.students} students · ${summary.format === "section_list" ? "Section-headed list detected" : "CSV table detected"}. ${sections}`;
+  $("clear-roster").hidden = false;
+  changed();
+  message(`Loaded ${summary.students} students. Review your counts or use auto-fit.`, "success");
+}
+
+$("nearby-roster").addEventListener("click", async () => {
+  if (busy) return;
+  setBusy(true);
+  try { const result = await api("/api/nearby-roster", {}); useRoster(result.content, result); }
+  catch (error) { message(error.message, "error"); }
+  finally { setBusy(false); }
+});
+
+function clearAssignments() {
+  assignmentsText = ""; $("assignments-upload").value = "";
+  $("assignments-status").textContent = "No saved assignments loaded.";
+  $("clear-assignments").hidden = true; $("fresh-allocation").checked = false;
+}
+$("assignments-upload").addEventListener("change", async event => {
+  const file = event.target.files[0]; if (!file) return;
+  if (file.size > 1024 * 1024) { message("Choose an assignments CSV smaller than 1 MB.", "error"); event.target.value = ""; return; }
+  assignmentsText = await file.text();
+  state.reuse_assignments_file = file.name; $("reuse_assignments_file").value = file.name;
+  $("assignments-status").textContent = `${file.name} loaded. These seats will be verified when generating PDFs.`;
+  $("clear-assignments").hidden = false; $("fresh-allocation").checked = false; changed();
+});
+$("clear-assignments").addEventListener("click", () => { clearAssignments(); changed(); });
+$("fresh-allocation").addEventListener("change", changed);
+
+function saveLibrary() {
+  try { localStorage.setItem(libraryKey, JSON.stringify(library)); } catch { /* Downloads still work without local storage. */ }
+}
+
+function renderLibrary() {
+  $("library-rooms").replaceChildren(...library.map(room => {
+    const label = node("label", "library-choice");
+    const checkbox = node("input"); checkbox.type = "checkbox"; checkbox.checked = librarySelection.has(room.name);
+    checkbox.setAttribute("aria-label", `Use ${room.name}`);
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) librarySelection.add(room.name); else librarySelection.delete(room.name);
+      $("library-count").textContent = `${librarySelection.size} room(s) selected`;
+      $("use-library").disabled = busy || !librarySelection.size;
+    });
+    const text = node("span"); text.append(node("strong", "", room.name), node("small", "", `${room.rows} rows × ${room.columns} seats · ${available(room)} available`));
+    label.append(checkbox, text); return label;
+  }));
+  $("library-count").textContent = `${librarySelection.size} room(s) selected`;
+  $("use-library").disabled = busy || !librarySelection.size;
+}
+
+$("library-button").addEventListener("click", () => {
+  librarySelection = new Set(state.rooms.filter(room => library.some(item => item.name === room.name)).map(room => room.name));
+  renderLibrary(); $("library-dialog").showModal();
+});
+$("close-library").addEventListener("click", () => $("library-dialog").close());
+$("use-library").addEventListener("click", () => {
+  try {
+    state.rooms = selectLibraryRooms(state.rooms, library, [...librarySelection]); selected = 0;
+    changed(); renderRoom(); $("library-dialog").close(); message("Selected rooms are ready. Adjust their student counts or auto-fit your roster.");
+  } catch (error) { message(error.message, "error"); }
+});
+$("save-rooms").addEventListener("click", async () => {
+  if (busy) return;
+  setBusy(true);
+  try {
+    const result = await api("/api/library/save", { rooms: state.rooms });
+    library = mergeRoomLibrary(library, result.rooms); saveLibrary();
+    message("Room layouts saved in this browser's library. Use Download library to keep a reusable file.", "success");
+  } catch (error) { message(error.message, "error"); }
+  finally { setBusy(false); }
+});
+$("import-library").addEventListener("click", () => $("library-file").click());
+$("library-file").addEventListener("change", async event => {
+  const file = event.target.files[0]; if (!file) return;
+  setBusy(true);
+  try {
+    if (file.size > 1024 * 1024) throw new Error("Choose a room library smaller than 1 MB.");
+    const result = await api("/api/library/import", { content: await file.text(), format: file.name.split(".").pop() });
+    library = mergeRoomLibrary(library, result.rooms); saveLibrary(); renderLibrary();
+  } catch (error) { $("library-dialog").close(); message(error.message, "error"); }
+  finally { event.target.value = ""; setBusy(false); }
+});
+$("download-library").addEventListener("click", () => {
+  const url = URL.createObjectURL(new Blob([JSON.stringify({version:1, rooms:library}, null, 2) + "\n"], {type:"application/json"}));
+  const link = node("a"); link.href = url; link.download = "room_library.json"; document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+
+async function generatePdfs() {
+  if (busy || !rosterText) return;
+  for (const input of document.querySelectorAll("input[required], input[type=number]")) if (!input.reportValidity()) return;
+  const stamp = revision, snapshot = currentConfig();
+  generating = true; setBusy(true); message("Generating and verifying PDFs, assignments, and the ZIP package…");
+  try {
+    const result = await api("/api/generate", { config:snapshot, roster:rosterText, assignments:$("fresh-allocation").checked ? "" : assignmentsText, fresh:$("fresh-allocation").checked });
+    generatedRevision = stamp;
+    $("generated-card").hidden = false;
+    $("generated-stale").hidden = revision === stamp;
+    $("generated-summary").textContent = `${snapshot.course} · ${snapshot.exam_title} · ${snapshot.date} · Verified ${result.report.assigned_students} students and ${result.report.unique_room_seats} unique seats in ${Object.keys(result.report.room_counts).length} rooms.`;
+    const labels = {"_Exam_Package.zip":"Complete exam package (.zip)", "_Door_Lists.pdf":"Door lists (.pdf)", "_Seating_Plans.pdf":"Seating plans (.pdf)", "_Assignments.csv":"Assignments (.csv)", "Validation_Report.json":"Validation report (.json)"};
+    const links = [];
+    for (const [suffix, label] of Object.entries(labels)) {
+      const file = result.files.find(item => item.name.endsWith(suffix)); if (!file) continue;
+      const link = node("a", `button ${suffix.endsWith(".zip") ? "primary" : "secondary"}`, `↓ ${label}`);
+      link.href = file.url; link.download = file.name; links.push(link);
+    }
+    $("generated-files").replaceChildren(...links);
+    message("Your verified exam package is ready to download.", "success");
+    $("generated-heading").focus();
+  } catch (error) { message(error.message, "error"); }
+  finally { generating = false; setBusy(false); }
+}
+$("generate-button").addEventListener("click", generatePdfs);
+$("generate-review").addEventListener("click", generatePdfs);
+
+async function bootstrap() {
+  let cached = [];
+  try { const stored = JSON.parse(localStorage.getItem(libraryKey)); if (Array.isArray(stored)) cached = stored; } catch { /* Defaults remain available. */ }
+  const results = await Promise.allSettled([apiGet("/api/library"), apiGet("/api/nearby-roster")]);
+  library = results[0].status === "fulfilled" ? mergeRoomLibrary(results[0].value.rooms, cached) : cached;
+  if (results[1].status === "fulfilled") $("nearby-roster").hidden = !results[1].value.found;
+  saveLibrary(); setBusy(busy);
+}
 renderAll();
+bootstrap();

@@ -66,7 +66,7 @@ pythonpath = ["."]
 addopts = "--cov --cov-report=term-missing --cov-fail-under=90"
 
 [tool.coverage.run]
-source = ["generate", "seating", "configure", "exam_seating_generator"]
+source = ["generate", "seating", "configure", "editor_workflow", "exam_seating_generator"]
 branch = true
 
 [tool.coverage.report]
@@ -75,7 +75,7 @@ exclude_also = ["if __name__ == .__main__.:"]
 [tool.mypy]
 ignore_missing_imports = true
 disallow_untyped_defs = true
-files = ["generate.py", "seating.py", "configure.py", "exam_seating_generator", "tests"]
+files = ["generate.py", "seating.py", "configure.py", "editor_workflow.py", "exam_seating_generator", "tests"]
 
 [tool.commitizen]
 name = "cz_conventional_commits"

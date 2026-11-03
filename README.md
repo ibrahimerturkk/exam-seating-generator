@@ -1,6 +1,7 @@
 # Exam seating generator
 
-A portable exam seating tool with a visual config editor and command-line PDF generation.
+A portable exam seating tool with a visual room planner and PDF generation from
+the browser or command line.
 Use it for any course. Change the roster and settings for each exam. Existing JSON configs also work.
 No Codex, Excel installation, or operating-system-specific fonts are required.
 
@@ -33,18 +34,24 @@ Use `--no-browser` to open the printed URL yourself, or `--port 8766` if the
 default port is occupied.
 
 1. Enter any **course name**, exam title, date, and time, then choose a section rule.
-2. Add, name, or duplicate rooms. Set rows, seats per row, and student counts.
+2. **Choose from room library**, or add, name, and duplicate rooms yourself.
+   Select only the rooms used for this exam, then adjust their student counts.
 3. Click **+ / − between column labels** to add or remove aisles. Click seats to
    block or unblock them. Resize grids to change the layout.
-4. Optionally upload a roster CSV. **Check configuration** verifies totals and
+4. Load a roster CSV. Use **Use nearby list.csv** when the file is in this
+   project's parent folder, or **Choose roster CSV** to upload another file.
+   **Check configuration** verifies totals and
    section rules. **Auto-fit students to rooms** suggests counts using each
    room's available seats and the selected section rule.
-5. Choose **Save config**, review the preview, and download TOML or JSON.
+5. Click **Generate PDFs**, then download the combined door lists, seating plans,
+   assignments CSV, validation report, or complete ZIP package from the page.
+6. Optionally choose **Save config** and download TOML or JSON for later exams.
    Shared room settings are automatically extracted into `room_defaults`.
 
-Save the downloaded config beside its roster CSV, or adjust `roster_file` under
-**Files & advanced settings**. Uploading a CSV checks it in memory; it does not
-copy the CSV into your Downloads folder. Generate PDFs with:
+No config download or command-line generation is needed for the browser flow.
+To use a downloaded config from the command line, save it beside its roster CSV
+or adjust `roster_file` under **Files & advanced settings**. Uploading a CSV does
+not copy it into your Downloads folder. The command-line equivalent is:
 
 ```sh
 python generate.py --config my_exam.toml --output generated/my_exam
@@ -53,8 +60,56 @@ python generate.py --config my_exam.toml --output generated/my_exam
 **Import config** loads existing TOML or JSON files, including shared defaults,
 saved-assignment paths, exclusions, and per-room overrides. Room section choices
 can be automatic or selected explicitly. Draft settings are saved in this
-browser; uploaded roster contents are kept only in the current session. The
-editor serves only its own assets and does not expose local roster files.
+browser; uploaded roster and assignment contents stay in the current session.
+Generation uses a temporary workspace that is removed after validation. Generated
+downloads remain in server memory for one hour, with at most five packages kept;
+stopping the editor clears them. It does not expose arbitrary local files.
+
+### Reusable room definitions
+
+The starter library in `examples/rooms.toml` defines EE03, EE04, and EE05 as
+physical layouts, independent of any course or roster. **Choose from room
+library** lets you select a subset. Existing adjustments are preserved for
+matching room names; newly selected rooms start with zero students.
+
+**Import room library** accepts standalone JSON/TOML libraries or an existing
+exam config. Exam details, student counts, and section choices are omitted from
+the imported definitions. **Save these rooms to library** remembers your current
+layouts in this browser. **Download library** saves a portable JSON file you can
+import on another computer. Imported definitions merge by room name.
+
+```toml
+version = 1
+
+[room_defaults]
+rows = 7
+columns = 6
+aisles_after = [2, 4]
+
+[[rooms]]
+name = "Lecture Hall A"
+
+[[rooms]]
+name = "Lecture Hall B"
+rows = 8
+blocked_seats = ["1A"]
+```
+
+### Automatic roster parsing and saved reprints
+
+Both the UI and CLI accept the original section-headed `list.csv` format,
+including mixed tabs/spaces, blank lines, UTF-8 BOMs, and Turkish names. They
+also accept ordinary comma-, semicolon-, or tab-separated tables. The UI shows
+the detected format, student total, and section counts immediately after loading.
+It preserves student IDs, including leading zeros, and rejects duplicate IDs or
+malformed rows. Nearby-file detection looks only for `list.csv` in this project's
+parent directory and reads its contents only when you click the load button.
+
+To preserve published seats, open **Reprint saved assignments** and upload the
+saved assignments CSV before generating. The generator verifies its students,
+names, rooms, seats, and section rules. If an imported config names a saved
+assignment file, generation requires that upload or an explicit **Make a new
+allocation** choice. Configured file paths are never opened by browser requests.
 
 When a grid shrinks, blocked seats and aisle boundaries outside it are removed.
 If blocking or resizing reduces capacity below the planned count, the editor
@@ -301,7 +356,10 @@ pagination/bookmarks/sorting, CSV and ZIP round trips, CLI options, and recovery
 from failed generation or publication. Editor tests cover HTTP endpoints,
 config import/export round trips, roster auto-fitting, all three section rules,
 explicit room choices, and invalid or conflicting requests. Browser QA also
-covers editing seats/aisles, importing files, and downloading a usable config.
+covers editing seats/aisles, importing files, selecting reusable rooms, loading
+the parent `list.csv`, and generating/downloading a verified package. HTTP tests
+exercise real PDFs and ZIP downloads, saved reprints, failed builds, expired
+downloads, room-library round trips, and nearby-file detection.
 
 PDFs use ReportLab's [canvas API](https://docs.reportlab.com/reportlab/userguide/ch2_graphics/)
 and [embedded TrueType fonts](https://docs.reportlab.com/reportlab/userguide/ch3_fonts/).

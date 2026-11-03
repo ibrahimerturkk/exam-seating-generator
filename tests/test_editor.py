@@ -1,8 +1,6 @@
 """The UI uses the same validators as the CLI and exports runnable configs."""
 
 import json
-import threading
-from collections.abc import Iterator
 from contextlib import closing
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
@@ -93,18 +91,6 @@ def test_invalid_actions_fail_with_explanations(
         api_request(route, body)
 
 
-@pytest.fixture
-def editor_server() -> Iterator[ThreadingHTTPServer]:
-    with ThreadingHTTPServer(("127.0.0.1", 0), EditorHandler) as server:
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
-            yield server
-        finally:
-            server.shutdown()
-            thread.join(timeout=5)
-
-
 def request(
     server: ThreadingHTTPServer,
     method: str,
@@ -161,7 +147,7 @@ def test_launcher_and_clean_shutdown(monkeypatch: pytest.MonkeyPatch, no_browser
     server.serve_forever.side_effect = KeyboardInterrupt
     factory = MagicMock(return_value=server)
     opener = MagicMock()
-    monkeypatch.setattr(configure, "ThreadingHTTPServer", factory)
+    monkeypatch.setattr(configure, "EditorServer", factory)
     monkeypatch.setattr(configure.webbrowser, "open", opener)
     assert main(["--no-browser"] if no_browser else []) == 0
     factory.assert_called_once_with(("127.0.0.1", 8765), EditorHandler)
@@ -173,7 +159,7 @@ def test_launcher_port_errors_are_actionable(
 ) -> None:
     with pytest.raises(SystemExit):
         main(["--port", "70000"])
-    monkeypatch.setattr(configure, "ThreadingHTTPServer", MagicMock(side_effect=OSError("in use")))
+    monkeypatch.setattr(configure, "EditorServer", MagicMock(side_effect=OSError("in use")))
     with pytest.raises(SystemExit):
         main(["--no-browser"])
     assert "Try another --port" in capsys.readouterr().err

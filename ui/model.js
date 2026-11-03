@@ -69,3 +69,18 @@ export function exportConfig(state) {
   if (result.section_policy === "mixed") result.rooms.forEach(room => { room.section = ""; });
   return result;
 }
+
+export function mergeRoomLibrary(current, imported) {
+  const rooms = new Map(current.map(room => [room.name, structuredClone(room)]));
+  for (const room of imported) rooms.set(room.name, structuredClone(room));
+  return [...rooms.values()];
+}
+
+export function selectLibraryRooms(current, library, names) {
+  if (!names.length) throw new Error("Choose at least one room for this exam.");
+  const selected = new Set(names);
+  const rooms = library.filter(room => selected.has(room.name)).map(room =>
+    structuredClone(current.find(item => item.name === room.name) || { ...room, student_count: 0, section: "" }));
+  if (rooms.length !== selected.size) throw new Error("A selected room is no longer in the library.");
+  return rooms;
+}
