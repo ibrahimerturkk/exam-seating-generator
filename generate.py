@@ -479,6 +479,11 @@ def build(
             "room_counts": {
                 room.name: len(people) for room, people in zip(config.rooms, grouped, strict=True)
             },
+            "section_policy": config.section_policy,
+            "room_sections": {
+                room.name: sorted({a.student.section for a in assignments if a.room == room.name})
+                for room in config.rooms
+            },
             "missing_students": [],
             "extra_students": [],
             "duplicate_students": [],

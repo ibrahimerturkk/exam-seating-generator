@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Exam room planner</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Exam room planner home"><span class="brand-icon" aria-hidden="true">▦</span><span>Exam room planner<small>SEATING CONFIGURATION</small></span></a>
+    <div class="actions"><span id="draft-status" class="muted">Local draft</span><button id="import-button" class="button secondary">Import config</button><button id="save-button" class="button primary">Save config <span aria-hidden="true">↓</span></button></div>
+    <input id="import-file" type="file" accept=".toml,.json" hidden>
+  </header>
+  <main class="workspace">
+    <div class="page-heading"><div><p class="eyebrow">FROM CLASSROOM TO CONFIG</p><h1>A place for every student.</h1><p>Set up your exam, shape your rooms, and save your seating configuration.</p></div><div id="overview" class="overview" aria-live="polite"></div></div>
+    <div id="message" class="message" role="status" aria-live="polite" hidden></div>
+    <div class="editor-layout">
+      <aside class="sidebar">
+        <section class="card exam-card" aria-labelledby="exam-heading">
+          <h2 id="exam-heading"><span class="step">1</span> Exam details</h2>
+          <label>Course name<input id="course" placeholder="e.g. MATH 101" required autocomplete="off"></label>
+          <label>Exam title<input id="exam_title" required></label>
+          <div class="two-fields"><label>Date<input id="date" type="date" required></label><label>Time<input id="time" type="time" required></label></div>
+          <label>Sections<select id="section_policy"><option value="mixed">Mix sections across rooms</option><option value="separate_rooms">One section per room</option><option value="keep_together">Keep each section in one room</option></select></label>
+          <p id="policy-help" class="help"></p>
+          <details><summary>Files &amp; advanced settings</summary><div class="details-body">
+            <label>Roster filename<input id="roster_file" placeholder="students.csv"></label><p class="help">Save your config beside this CSV, or enter its relative path.</p>
+            <label>Output filename prefix<input id="filename_prefix" placeholder="Automatic from course name"></label>
+            <label>Random seed<input id="seed" required></label>
+            <label>Name sorting<select id="sort_order"><option value="turkish">Turkish alphabet</option><option value="unicode">Unicode</option></select></label>
+            <label>Excluded student IDs<textarea id="excluded_student_ids" rows="2" placeholder="One ID per line"></textarea></label>
+            <label>Reuse assignments filename<input id="reuse_assignments_file" placeholder="Optional saved assignments CSV"></label>
+          </div></details>
+        </section>
+        <section class="card rooms-card" aria-labelledby="rooms-heading"><div class="section-heading"><h2 id="rooms-heading"><span class="step">2</span> Your rooms</h2><button id="add-room" class="button small secondary">+ Add</button></div><nav id="room-list" aria-label="Rooms"></nav></section>
+        <section class="card roster-card" aria-labelledby="roster-heading"><h2 id="roster-heading">Check with your roster <span class="tag">Optional</span></h2><p class="help">Upload a CSV to check student totals and section rules, or auto-fit room counts.</p><label class="file-button" for="roster-upload">Choose roster CSV<input id="roster-upload" type="file" accept=".csv,.tsv,.txt"></label><p id="roster-status" class="help">Student data stays in this local session.</p><button id="fit-button" class="button secondary full" disabled>Auto-fit students to rooms</button><button id="clear-roster" class="text-button" hidden>Remove roster</button></section>
+      </aside>
+      <div class="main-panel">
+        <section class="card layout-card" aria-labelledby="layout-heading">
+          <div class="layout-title"><div><p class="eyebrow">ROOM DESIGNER</p><h2 id="layout-heading">Room 1</h2></div><div class="actions"><button id="duplicate-room" class="button secondary small">Duplicate</button><button id="remove-room" class="button quiet small">Remove</button></div></div>
+          <div class="room-fields"><label>Room name<input id="room-name" required></label><label>Rows<input id="rows" type="number" min="1" max="100" step="1" required></label><label>Seats per row<input id="columns" type="number" min="1" max="52" step="1" required></label><label>Students to seat<input id="student_count" type="number" min="0" step="1" required></label></div>
+          <div class="canvas-heading"><span id="room-capacity" class="capacity"></span><span class="help">Click a seat to block it. Click between columns to add an aisle.</span></div>
+          <div class="room-canvas"><div class="board">BOARD / FRONT</div><div class="grid-scroll" tabindex="0" aria-label="Room grid, scroll horizontally for wide rooms"><div id="room-grid" class="room-grid"></div></div><div class="grid-legend"><span><i class="legend-seat"></i> Available</span><span><i class="legend-seat blocked"></i> Blocked</span><span><i class="legend-aisle"></i> Aisle</span></div></div>
+          <div class="room-options"><label>Fill seats<select id="seating_policy"><option value="front_first">From the front</option><option value="spread">Spread across the room</option><option value="random">Random seats</option></select></label><label>Seating plan paper<select id="paper_size"><option value="auto">Auto · smallest readable size</option><option>A4</option><option>A3</option><option>A2</option></select></label><label id="section-field" hidden>Room section<input id="section" list="section-choices" placeholder="Automatic"><datalist id="section-choices"></datalist></label></div>
+          <p class="help layout-note">Rows are counted from the board. Facing the board, columns run left to right. Each room gets its own seating page.</p>
+        </section>
+        <section class="card review-card" aria-labelledby="review-heading"><div><h2 id="review-heading"><span class="step">3</span> Review &amp; save</h2><p id="review-status" class="help">Check your layout before saving a config.</p></div><button id="check-button" class="button secondary">Check configuration</button><div id="check-results" hidden></div></section>
+        <p class="local-note">Runs on your computer · No account or internet connection needed</p>
+      </div>
+    </div>
+  </main>
+  <dialog id="export-dialog"><div class="dialog-heading"><div><p class="eyebrow">READY TO USE</p><h2>Save your configuration</h2></div><button id="close-export" class="icon-button" aria-label="Close">×</button></div><p class="help">Keep the config and roster together so relative file paths work.</p><label>File format<select id="export-format"><option value="toml">TOML · readable with comments</option><option value="json">JSON</option></select></label><textarea id="config-preview" rows="14" readonly aria-label="Configuration preview" spellcheck="false"></textarea><div class="dialog-footer"><span id="export-name" class="help"></span><button id="download-button" class="button primary">Download config ↓</button></div></dialog>
+</body>
+</html>

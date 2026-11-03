@@ -1,7 +1,7 @@
 # Exam seating generator
 
-A portable Python command-line tool for preparing exam seating plans and door lists.
-Change the roster and TOML settings for each exam. Existing JSON configs also work.
+A portable exam seating tool with a visual config editor and command-line PDF generation.
+Use it for any course. Change the roster and settings for each exam. Existing JSON configs also work.
 No Codex, Excel installation, or operating-system-specific fonts are required.
 
 ## Setup
@@ -17,6 +17,48 @@ python -m pip install -r requirements.txt
 On Windows, use `python` instead of `python3`, then activate with
 `.venv\Scripts\activate` in Command Prompt or `.venv\Scripts\Activate.ps1`
 in PowerShell.
+
+## Visual room and exam editor
+
+Start the editor from this folder:
+
+```sh
+python configure.py
+```
+
+It opens `http://127.0.0.1:8765` in your browser. With uv, use
+`uv run --locked python configure.py` or `make ui`. No frontend build, Node.js,
+account, or internet connection is needed to use the editor. Stop it with Ctrl+C.
+Use `--no-browser` to open the printed URL yourself, or `--port 8766` if the
+default port is occupied.
+
+1. Enter any **course name**, exam title, date, and time, then choose a section rule.
+2. Add, name, or duplicate rooms. Set rows, seats per row, and student counts.
+3. Click **+ / − between column labels** to add or remove aisles. Click seats to
+   block or unblock them. Resize grids to change the layout.
+4. Optionally upload a roster CSV. **Check configuration** verifies totals and
+   section rules. **Auto-fit students to rooms** suggests counts using each
+   room's available seats and the selected section rule.
+5. Choose **Save config**, review the preview, and download TOML or JSON.
+   Shared room settings are automatically extracted into `room_defaults`.
+
+Save the downloaded config beside its roster CSV, or adjust `roster_file` under
+**Files & advanced settings**. Uploading a CSV checks it in memory; it does not
+copy the CSV into your Downloads folder. Generate PDFs with:
+
+```sh
+python generate.py --config my_exam.toml --output generated/my_exam
+```
+
+**Import config** loads existing TOML or JSON files, including shared defaults,
+saved-assignment paths, exclusions, and per-room overrides. Room section choices
+can be automatic or selected explicitly. Draft settings are saved in this
+browser; uploaded roster contents are kept only in the current session. The
+editor serves only its own assets and does not expose local roster files.
+
+When a grid shrinks, blocked seats and aisle boundaries outside it are removed.
+If blocking or resizing reduces capacity below the planned count, the editor
+reduces that count and displays a notice. Review and recheck before saving.
 
 ## Reproduce the approved EEE 212 exam
 
@@ -50,7 +92,7 @@ The supplied roster and saved assignments contain student information.
 `roster_file` is resolved relative to the config file. You can override it with
 `--roster path/to/students.csv`. CLI paths are relative to the current directory.
 CSV files must use UTF-8; comma, semicolon, and tab delimiters are accepted.
-`section` is optional. The original section-headed `list.csv` format is also
+`section` is optional when mixing sections. The original section-headed `list.csv` format is also
 accepted, including its mixed tabs and spaces.
 
 ## Configure each room
@@ -101,6 +143,7 @@ and invalid values fail with an error.
 | `blocked_seats` | Seats unavailable for use, e.g. `["1A","2F"]`. Also supports irregular physical layouts by excluding nonexistent seats. |
 | `seating_policy` | `front_first`, `spread`, or `random`. Inherits shared defaults if omitted. |
 | `paper_size` | `auto`, `A4`, `A3`, or `A2`. Inherits shared defaults if omitted. |
+| `section` | Optional section for this room, such as `"1"`; leave empty for automatic selection. Requires a section policy other than `mixed`. |
 
 Room grids and counts may differ. For example, one room can have 5 rows of
 4 seats and 16 students, while another has 8 rows of 6 seats and 30 students.
@@ -138,11 +181,37 @@ column headers and page numbers within each room. Empty rooms retain one page.
 | `filename_prefix` | `"EEE212"` (optional; derived from `course`) |
 | `seed` | `"EEE212-2026-11-04-v1"` |
 | `sort_order` | `"turkish"` or `"unicode"` |
+| `section_policy` | `"mixed"` (default), `"separate_rooms"`, or `"keep_together"` |
 | `excluded_student_ids` | `[]`, or explicit IDs to omit, such as `["00123456"]` |
 
 Students are identified by ID, not by name. Duplicate IDs, unmatched exclusions,
 insufficient room capacity, unavailable seats, and count mismatches stop generation
 with an explanation. No additional students are silently dropped.
+
+## Section allocation
+
+| Policy | Behavior |
+| --- | --- |
+| `mixed` | Shuffle students across all rooms regardless of section. |
+| `separate_rooms` | Each room contains only one section. A large section may occupy multiple rooms. |
+| `keep_together` | Each section stays entirely in one room, with no other sections in that room. |
+
+Both separate policies require a nonempty `section` for every active student.
+The generator respects exact `student_count` values and optional room `section`
+choices. It reports an error if these cannot accommodate the sections; it never
+mixes sections, drops students, or changes counts silently. The editor's explicit
+auto-fit action can change counts to find a feasible arrangement using physical
+capacities. A section larger than every room cannot use `keep_together`.
+
+Try the synthetic, course-independent example:
+
+```sh
+python generate.py --config examples/sectioned_exam.toml --output generated/sectioned_exam
+```
+
+It uses MATH 101, two sections, and three rooms. Import it in the editor to try
+both separate policies. Saved assignments are also checked against the selected
+section policy when reprinting; changing that policy may require `--fresh`.
 
 ## Keep or change an allocation
 
@@ -182,7 +251,8 @@ a timestamped backup. A failed generation leaves the previous output in place.
 - `EEE212_Assignments.csv`: the master allocation, suitable for Excel and later
   reuse. Student IDs are stored as text in the CSV. To preserve leading zeros
   when importing into Excel, set the Student ID column type to Text.
-- `Validation_Report.json`: student totals, room counts, uniqueness checks, PDF
+- `Validation_Report.json`: student totals, room counts and sections, the section
+  policy, uniqueness checks, PDF
   text checks, selected paper sizes, and per-room/total door-list page counts.
 - `manifest.json`: configuration, roster checksum, seed, and saved assignments.
 - `EEE212_Exam_Package.zip`: the generated files together.
@@ -195,14 +265,17 @@ Generated files and backups stay local under `generated/` and are ignored by Git
 
 ## Tests and maintenance
 
-Install [uv](https://docs.astral.sh/uv/), then use the committed lockfile:
+For development, install [uv](https://docs.astral.sh/uv/) and Node.js 20 or newer,
+then use the committed Python lockfile. The UI tests use Node's built-in test
+runner; there are no npm dependencies to install.
 
 ```sh
 uv sync --locked
 make check
 ```
 
-`make check` checks formatting, lint, types, and the full pytest suite, with a
+`make check` checks formatting, lint, types, JavaScript syntax/grid behavior, and
+the full pytest suite, with a
 90% branch-inclusive coverage minimum across the actual generator and seating
 code. Checks do not edit source files. Use `make format` to format and fix lint.
 On Windows without Make, run the commands directly:
@@ -212,18 +285,23 @@ uv run --locked ruff format --check .
 uv run --locked ruff check .
 uv run --locked mypy
 uv run --locked python -m pytest
+node --check ui/app.js
+node --test ui/tests/model.test.js
 ```
 
 `make init` also installs the pre-commit and conventional commit-message hooks.
 GitHub Actions runs tests on Python 3.10, 3.11, and 3.12 for pushes to `main`
-and pull requests, and runs lint/types on 3.12. `uv run --locked tox` runs the
+and pull requests, and runs lint/types and UI tests on 3.12. `uv run --locked tox` runs the
 same supported Python versions locally when those interpreters are installed.
 
 Tests cover both config formats, default inheritance and overrides, input errors,
 CSV delimiters and Turkish names, reproducibility, blocked seats, all seat
 policies, saved assignments, the approved 81-student allocation, combined PDF
 pagination/bookmarks/sorting, CSV and ZIP round trips, CLI options, and recovery
-from failed generation or publication.
+from failed generation or publication. Editor tests cover HTTP endpoints,
+config import/export round trips, roster auto-fitting, all three section rules,
+explicit room choices, and invalid or conflicting requests. Browser QA also
+covers editing seats/aisles, importing files, and downloading a usable config.
 
 PDFs use ReportLab's [canvas API](https://docs.reportlab.com/reportlab/userguide/ch2_graphics/)
 and [embedded TrueType fonts](https://docs.reportlab.com/reportlab/userguide/ch3_fonts/).

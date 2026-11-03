@@ -1,0 +1,27 @@
+# Any course can use the generator. This sample has two synthetic sections.
+course = "MATH 101"
+exam_title = "Sample Exam"
+date = "2026-11-04"
+time = "09:00"
+seed = "sections-example"
+roster_file = "sectioned_roster.csv"
+section_policy = "separate_rooms"
+# "mixed": shuffle everyone across rooms.
+# "separate_rooms": one section per room; a section may span rooms.
+# "keep_together": each section must fit entirely in one room.
+# For keep_together with this roster, use counts 8, 4, 0 below.
+
+[room_defaults]
+rows = 2
+columns = 4
+aisles_after = [2]
+student_count = 4
+
+[[rooms]]
+name = "North Hall"
+
+[[rooms]]
+name = "South Hall"
+
+[[rooms]]
+name = "East Hall"

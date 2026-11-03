@@ -18,6 +18,9 @@ jobs:
         python-version: ["3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -25,4 +28,4 @@ jobs:
       - run: uv sync --locked
       - run: uv run --locked python -m pytest --junitxml=test-results.xml
       - if: matrix.python-version == '3.12'
-        run: make lint type
+        run: make lint type ui-test

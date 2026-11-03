@@ -1,10 +1,10 @@
-.PHONY: all check init clean format lint type test
+.PHONY: all check init clean format lint type test ui-test ui
 
 RUN := uv run --locked
 
 all: check
 
-check: lint type test
+check: lint type test ui-test
 
 init:
 	uv sync --locked
@@ -26,3 +26,10 @@ type:
 
 test:
 	$(RUN) python -m pytest
+
+ui-test:
+	node --check ui/app.js
+	node --test ui/tests/model.test.js
+
+ui:
+	$(RUN) python configure.py

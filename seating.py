@@ -10,8 +10,10 @@ import random
 import re
 import sys
 import unicodedata
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, replace
 from datetime import date, time
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, cast
 
@@ -78,6 +80,7 @@ class Room:
     blocked_seats: tuple[str, ...] = ()
     seating_policy: str = "front_first"
     paper_size: str = "auto"
+    section: str = ""
 
     @property
     def available_seats(self) -> list[str]:
@@ -104,6 +107,7 @@ class Config:
     rooms: tuple[Room, ...]
     sort_order: str = "turkish"
     excluded_student_ids: tuple[str, ...] = ()
+    section_policy: str = "mixed"
 
 
 @dataclass(frozen=True)
@@ -133,6 +137,7 @@ ROOM_SETTINGS = {
     "blocked_seats",
     "seating_policy",
     "paper_size",
+    "section",
 }
 
 
@@ -178,16 +183,26 @@ def validate_room_settings(item: dict[str, Any], label: str) -> None:
         raise ValueError(f"{label}: seating_policy must be front_first, spread, or random.")
     if "paper_size" in item and item["paper_size"] not in ("auto", "A4", "A3", "A2"):
         raise ValueError(f"{label}: paper_size must be auto, A4, A3, or A2.")
+    if "section" in item and not isinstance(item["section"], str):
+        raise ValueError(f"{label}.section must be a string.")
 
 
 def read_config(path: Path) -> tuple[Config, dict[str, Any]]:
-    content = path.read_text(encoding="utf-8-sig")
-    if path.suffix.lower() == ".toml":
+    return parse_config(path.read_text(encoding="utf-8-sig"), path.suffix)
+
+
+def parse_config(content: str, config_format: str) -> tuple[Config, dict[str, Any]]:
+    """Read uploaded or on-disk configuration using the same strict validation."""
+    if config_format.lower().lstrip(".") == "toml":
         raw = tomllib.loads(content)
-    elif path.suffix.lower() == ".json":
+    elif config_format.lower().lstrip(".") == "json":
         raw = json.loads(content, object_pairs_hook=json_object)
     else:
         raise ValueError("Configuration filename must end in .toml or .json.")
+    return config_from_dict(raw), raw
+
+
+def config_from_dict(raw: Any) -> Config:
     if not isinstance(raw, dict):
         raise ValueError("Configuration must be an object/table.")
     check_keys(
@@ -207,12 +222,16 @@ def read_config(path: Path) -> tuple[Config, dict[str, Any]]:
             "roster_file",
             "reuse_assignments_file",
             "room_defaults",
+            "section_policy",
         },
         "exam",
     )
     for key in ("course", "exam_title", "date", "time", "seed", "rooms"):
         if key not in raw:
             raise ValueError(f"Missing configuration setting: {key}")
+    section_policy = raw.get("section_policy", "mixed")
+    if section_policy not in ("mixed", "separate_rooms", "keep_together"):
+        raise ValueError("section_policy must be mixed, separate_rooms, or keep_together.")
     for key in ("course", "exam_title", "date", "time"):
         if not isinstance(raw[key], str) or not raw[key].strip():
             raise ValueError(f"{key} must be a nonempty string.")
@@ -269,8 +288,19 @@ def read_config(path: Path) -> tuple[Config, dict[str, Any]]:
                 raise ValueError(f"{name}: blocked seat {code} is outside the grid.")
         policy = cast(str, item.get("seating_policy", raw.get("seating_policy", "front_first")))
         paper = cast(str, item.get("paper_size", raw.get("paper_size", "auto")))
+        section = clean(item.get("section", ""))
+        if section and section_policy == "mixed":
+            raise ValueError(f"{name}: choose a separate section policy to set a room's section.")
         room = Room(
-            name, rows, columns, count, tuple(sorted(aisles)), tuple(blocked), policy, paper
+            name,
+            rows,
+            columns,
+            count,
+            tuple(sorted(aisles)),
+            tuple(blocked),
+            policy,
+            paper,
+            section,
         )
         if count > len(room.available_seats):
             raise ValueError(
@@ -303,8 +333,9 @@ def read_config(path: Path) -> tuple[Config, dict[str, Any]]:
         tuple(rooms),
         sort_order,
         tuple(excluded),
+        section_policy,
     )
-    return config, raw
+    return config
 
 
 def header_key(value: str) -> str:
@@ -326,7 +357,10 @@ def header_key(value: str) -> str:
 
 
 def csv_rows(path: Path) -> tuple[list[str], list[dict[str, str]]]:
-    content = path.read_text(encoding="utf-8-sig")
+    return parse_csv(path.read_text(encoding="utf-8-sig"), path.name)
+
+
+def parse_csv(content: str, label: str) -> tuple[list[str], list[dict[str, str]]]:
     try:
         dialect = csv.Sniffer().sniff(content[:8192], delimiters=",;\t")
     except csv.Error:
@@ -334,11 +368,11 @@ def csv_rows(path: Path) -> tuple[list[str], list[dict[str, str]]]:
     reader = csv.DictReader(io.StringIO(content), dialect=dialect)
     headers = [header_key(h.strip()) for h in (reader.fieldnames or [])]
     if len(set(headers)) != len(headers):
-        raise ValueError(f"Duplicate column header in {path.name}.")
+        raise ValueError(f"Duplicate column header in {label}.")
     records = []
     for index, row in enumerate(reader, 2):
         if None in row or any(v is None for v in row.values()):
-            raise ValueError(f"{path.name}, row {index}: wrong number of columns.")
+            raise ValueError(f"{label}, row {index}: wrong number of columns.")
         record = {header_key(k.strip()): clean(v) for k, v in row.items()}
         if any(record.values()):
             records.append(record)
@@ -346,7 +380,11 @@ def csv_rows(path: Path) -> tuple[list[str], list[dict[str, str]]]:
 
 
 def read_roster(path: Path) -> list[Student]:
-    content = path.read_text(encoding="utf-8-sig")
+    return parse_roster(path.read_text(encoding="utf-8-sig"), path.name)
+
+
+def parse_roster(content: str, label: str = "roster.csv") -> list[Student]:
+    content = content.lstrip("\ufeff")
     first = next((line.strip() for line in content.splitlines() if line.strip()), "")
     students = []
     if first.startswith("Section:"):
@@ -365,11 +403,11 @@ def read_roster(path: Path) -> list[Student]:
                 # Some section exports mix tabs and spaces within the name columns.
                 parts = line.split()
                 if len(parts) < 4 or not parts[0].isdigit():
-                    raise ValueError(f"{path.name}, line {index}: unrecognized roster row.")
+                    raise ValueError(f"{label}, line {index}: unrecognized roster row.")
                 surname, given, student_id = parts[1], " ".join(parts[2:-1]), parts[-1]
             students.append(Student(clean(student_id), clean(given), clean(surname), section))
     else:
-        headers, records = csv_rows(path)
+        headers, records = parse_csv(content, label)
         required = {"student_id", "given_name", "surname"}
         if not required <= set(headers):
             raise ValueError(
@@ -393,18 +431,122 @@ def read_roster(path: Path) -> list[Student]:
     return students
 
 
-def active_students(config: Config, students: list[Student]) -> list[Student]:
+def active_students(
+    config: Config, students: list[Student], check_counts: bool = True
+) -> list[Student]:
     unknown = set(config.excluded_student_ids) - {s.student_id for s in students}
     if unknown:
         raise ValueError(f"Excluded ID(s) are not in the roster: {', '.join(sorted(unknown))}")
     excluded = set(config.excluded_student_ids)
     result = [s for s in students if s.student_id not in excluded]
     expected = sum(r.student_count for r in config.rooms)
-    if len(result) != expected:
+    if check_counts and len(result) != expected:
         raise ValueError(
             f"Active roster has {len(result)} students, but room student_count values sum to {expected}."
         )
     return result
+
+
+def section_plan(
+    config: Config, students: list[Student], flexible: bool = False
+) -> list[tuple[str, int]]:
+    """Assign whole rooms to sections; a section may occupy several rooms.
+
+    Fixed plans respect every student_count. The editor's explicit auto-fit action
+    instead uses physical capacities and returns counts that fit the roster.
+    """
+    if any(not s.section for s in students):
+        raise ValueError(
+            "Every student needs a section when keeping sections separate. Add a section column to the roster."
+        )
+    totals = Counter(s.section for s in students)
+    names = sorted(totals)
+    sizes = tuple(totals[name] for name in names)
+    limits = [len(r.available_seats) if flexible else r.student_count for r in config.rooms]
+    order = sorted(range(len(config.rooms)), key=lambda i: (-limits[i], i))
+    for room, limit in zip(config.rooms, limits, strict=True):
+        if limit and room.section and room.section not in totals:
+            raise ValueError(f"{room.name}: section {room.section!r} is not in the active roster.")
+    visited = 0
+
+    @lru_cache(maxsize=100_000)
+    def solve(position: int, remaining: tuple[int, ...]) -> tuple[tuple[str, int], ...] | None:
+        nonlocal visited
+        visited += 1
+        if visited > 100_000:
+            raise ValueError(
+                "Section planning is too complex. Select a section for each room and try again."
+            )
+        if position == len(order):
+            return () if not any(remaining) else None
+        if sum(remaining) > sum(limits[i] for i in order[position:]):
+            return None
+        index = order[position]
+        room, limit = config.rooms[index], limits[index]
+        candidates = sorted(range(len(names)), key=lambda i: (-remaining[i], names[i]))
+        # Sections with equal remaining sizes are interchangeable unless rooms
+        # have explicit section choices.
+        seen: set[int] = set()
+        locked = any(r.section for r in config.rooms)
+        for i in candidates:
+            if room.section and room.section != names[i]:
+                continue
+            if not locked and remaining[i] in seen:
+                continue
+            seen.add(remaining[i])
+            count = min(limit, remaining[i]) if flexible else limit
+            if not count or count > remaining[i]:
+                continue
+            if config.section_policy == "keep_together" and (
+                remaining[i] != sizes[i] or count != remaining[i]
+            ):
+                continue
+            updated = list(remaining)
+            updated[i] -= count
+            rest = solve(position + 1, tuple(updated))
+            if rest is not None:
+                return ((names[i], count), *rest)
+        if flexible or not limit:
+            rest = solve(position + 1, remaining)
+            if rest is not None:
+                return ((room.section, 0), *rest)
+        return None
+
+    plan = solve(0, sizes)
+    if plan is None:
+        summary = ", ".join(f"{name}: {totals[name]}" for name in names)
+        raise ValueError(
+            f"Cannot keep sections separate with these room counts/capacities. Sections: {summary}. Adjust room counts, add rooms, or use auto-fit in the config editor."
+        )
+    result = [("", 0)] * len(config.rooms)
+    for index, value in zip(order, plan, strict=True):
+        result[index] = value
+    return result
+
+
+def suggest_rooms(config: Config, students: list[Student]) -> tuple[Room, ...]:
+    """Auto-fit counts using real capacities, without silently changing a build."""
+    students = active_students(config, students, check_counts=False)
+    if config.section_policy != "mixed":
+        return tuple(
+            replace(room, student_count=count)
+            for room, (_section, count) in zip(
+                config.rooms, section_plan(config, students, True), strict=True
+            )
+        )
+    counts = [0] * len(config.rooms)
+    capacities = [len(r.available_seats) for r in config.rooms]
+    for _ in students:
+        available = [i for i, count in enumerate(counts) if count < capacities[i]]
+        if not available:
+            raise ValueError(
+                "Not enough available seats for the roster. Add a room or enlarge a grid."
+            )
+        index = min(available, key=lambda i: (counts[i], i))
+        counts[index] += 1
+    return tuple(
+        replace(room, student_count=count) for room, count in zip(config.rooms, counts, strict=True)
+    )
 
 
 def sort_key(student: Student, order: str = "turkish") -> tuple:
@@ -474,12 +616,21 @@ def select_seats(room: Room, rng: random.Random) -> list[str]:
 def assign(config: Config, students: list[Student]) -> list[Assignment]:
     students = sorted(students, key=lambda s: s.student_id)
     random.Random(f"{config.seed}:rooms").shuffle(students)
+    section_groups = {
+        name: [s for s in students if s.section == name] for name in {s.section for s in students}
+    }
+    plan = section_plan(config, students) if (config.section_policy != "mixed") else []
     result: list[Assignment] = []
     offset = 0
-    for room in config.rooms:
+    for index, room in enumerate(config.rooms):
         seed = hashlib.sha256(f"{config.seed}:seats:{room.name}".encode()).hexdigest()
         seats = select_seats(room, random.Random(seed))
-        people = students[offset : offset + room.student_count]
+        if config.section_policy != "mixed":
+            name, count = plan[index]
+            people = section_groups.get(name, [])[:count]
+            section_groups[name] = section_groups.get(name, [])[count:]
+        else:
+            people = students[offset : offset + room.student_count]
         result.extend(Assignment(s, room.name, seat) for s, seat in zip(people, seats, strict=True))
         offset += room.student_count
     validate_assignments(config, students, result)
@@ -528,3 +679,24 @@ def validate_assignments(
             raise ValueError(
                 f"{room.name}: expected {room.student_count} students; found {actual}."
             )
+        if config.section_policy != "mixed":
+            sections = {a.student.section for a in assignments if a.room == room.name}
+            if "" in sections:
+                raise ValueError(
+                    f"{room.name}: every student needs a section when keeping sections separate."
+                )
+            if len(sections) > 1:
+                raise ValueError(
+                    f"{room.name}: students from different sections share a room. Generate a fresh allocation or choose the mixed section policy."
+                )
+            if sections and room.section and sections != {room.section}:
+                raise ValueError(
+                    f"{room.name}: assignments do not match the configured section {room.section!r}."
+                )
+    if config.section_policy == "keep_together":
+        for section in {s.section for s in students}:
+            occupied = {a.room for a in assignments if a.student.section == section}
+            if len(occupied) > 1:
+                raise ValueError(
+                    f"Section {section!r} is split across rooms. Each section must stay together in one room."
+                )
